@@ -24,8 +24,15 @@ export default [
   {
     name: 'strapi::cors',
     config: {
-      enabled: true,
-      origin: ['http://localhost:3000', 'http://localhost:1337'],
+      origin: [
+        'http://localhost:3000', 
+        'http://localhost:1337',
+        process.env.FRONTEND_URL,
+        // Allow all Vercel preview deployments
+        /https:\/\/.*\.vercel\.app$/,
+        // Allow your custom domain if you have one
+        process.env.ADMIN_URL
+      ].filter(Boolean),
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'],
       headers: ['Content-Type', 'Authorization', 'Origin', 'Accept'],
       keepHeaderOnError: true,

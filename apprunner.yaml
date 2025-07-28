@@ -1,0 +1,21 @@
+version: 1.0
+runtime: nodejs18
+build:
+  commands:
+    build:
+      - echo "🔧 Installing dependencies..."
+      - npm ci
+      - echo "🏗️ Building Strapi application..."
+      - npm run build
+      - echo "✅ Build completed successfully!"
+run:
+  runtime-version: 18
+  command: npm start
+  network:
+    port: 1337
+    env: PORT
+  env:
+    - name: NODE_ENV
+      value: production
+    - name: HOST
+      value: 0.0.0.0 
