@@ -50,11 +50,12 @@ export default ({ env }) => {
     },
   };
 
+  const selected = connections[client];
+
   return {
-    connection: {
-      client,
-      ...connections[client],
-      acquireConnectionTimeout: env.int('DATABASE_CONNECTION_TIMEOUT', 60000),
-    },
+    client,
+    connection: selected.connection,
+    pool: selected.pool,
+    acquireConnectionTimeout: env.int('DATABASE_CONNECTION_TIMEOUT', 60000),
   };
 };
