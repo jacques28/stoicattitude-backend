@@ -16,8 +16,6 @@
     "@strapi/plugin-users-permissions": "5.2.0",
     "@strapi/provider-upload-cloudinary": "^5.2.0",
     "@strapi/strapi": "5.2.0",
-    "better-sqlite3": "11.3.0",
-    "mongodb": "^6.3.0",
     "pg": "^8.11.0",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
@@ -31,8 +29,8 @@
     "typescript": "^5"
   },
   "engines": {
-    "node": ">=18.0.0 <=22.x.x",
-    "npm": ">=6.0.0"
+    "node": ">=18.18.0 <=22.x.x",
+    "npm": ">=8.0.0"
   },
   "strapi": {
     "uuid": "7f32b011-0177-40ea-9cd6-5534b32dacbb"

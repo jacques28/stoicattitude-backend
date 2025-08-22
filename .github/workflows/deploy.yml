@@ -1,0 +1,309 @@
+# ===================================================================
+# GitHub Actions CI/CD Pipeline for Strapi Backend
+# ===================================================================
+# 🚀 Automatically deploys to EC2 when changes are pushed to main
+# 🔒 Secure deployment with environment variables
+# 📦 Builds, tests, and deploys Strapi application
+
+name: Deploy Strapi Backend to EC2
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'stoicattitude-backend/**'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'stoicattitude-backend/**'
+  workflow_dispatch: # Manual trigger
+
+env:
+  NODE_VERSION: '22.12.0'
+  APP_PATH: '/home/ubuntu/stoic-backend'
+  PM2_APP_NAME: 'stoic-backend'
+
+jobs:
+  # ===================================================================
+  # JOB 1: BUILD AND TEST
+  # ===================================================================
+  test:
+    name: 🧪 Test & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./stoicattitude-backend
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🔧 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: ./stoicattitude-backend/package-lock.json
+
+    - name: 📦 Install Dependencies
+      run: npm ci
+
+    - name: 🔍 Type Check
+      run: npm run build
+
+    - name: 📊 Generate Build Info
+      run: |
+        echo "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_ENV
+        echo "BUILD_COMMIT=${GITHUB_SHA:0:7}" >> $GITHUB_ENV
+        echo "BUILD_BRANCH=${GITHUB_REF#refs/heads/}" >> $GITHUB_ENV
+
+    - name: 💾 Cache Build Artifacts
+      uses: actions/cache@v3
+      with:
+        path: |
+          ./stoicattitude-backend/dist
+          ./stoicattitude-backend/node_modules
+        key: build-${{ github.sha }}
+
+  # ===================================================================
+  # JOB 2: DEPLOY TO EC2
+  # ===================================================================
+  deploy:
+    name: 🚀 Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    defaults:
+      run:
+        working-directory: ./stoicattitude-backend
+
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 💾 Restore Build Cache
+      uses: actions/cache@v3
+      with:
+        path: |
+          ./stoicattitude-backend/dist
+          ./stoicattitude-backend/node_modules
+        key: build-${{ github.sha }}
+
+    - name: 🔧 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+
+    - name: 📦 Install Dependencies (if cache miss)
+      run: |
+        if [ ! -d "node_modules" ]; then
+          npm ci
+        fi
+
+    - name: 🏗️ Build Application (if cache miss)
+      run: |
+        if [ ! -d "dist" ]; then
+          npm run build
+        fi
+
+    - name: 📋 Create Deployment Package
+      run: |
+        # Create deployment directory
+        mkdir -p deploy
+        
+        # Copy essential files
+        cp -r dist deploy/
+        cp -r public deploy/
+        cp package*.json deploy/
+        cp -r config deploy/
+        cp -r database deploy/ 2>/dev/null || true
+        
+        # Copy scripts
+        mkdir -p deploy/scripts
+        cp scripts/*.sh deploy/scripts/ 2>/dev/null || true
+        
+        # Create ecosystem file for PM2
+        cat > deploy/ecosystem.config.js << 'EOF'
+        module.exports = {
+          apps: [{
+            name: 'stoic-backend',
+            script: './dist/src/index.js',
+            instances: 1,
+            exec_mode: 'cluster',
+            env: {
+              NODE_ENV: 'production',
+              PORT: 1337
+            },
+            error_file: './logs/err.log',
+            out_file: './logs/out.log',
+            log_file: './logs/combined.log',
+            time: true,
+            max_memory_restart: '500M',
+            node_args: '--max-old-space-size=400'
+          }]
+        }
+        EOF
+        
+        # Create startup script
+        cat > deploy/start.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "🚀 Starting Strapi deployment..."
+        
+        # Navigate to app directory
+        cd /home/ubuntu/stoic-backend
+        
+        # Install production dependencies
+        echo "📦 Installing dependencies..."
+        npm ci --production
+        
+        # Create logs directory
+        mkdir -p logs
+        
+        # Stop existing PM2 processes
+        echo "🛑 Stopping existing processes..."
+        pm2 stop stoic-backend 2>/dev/null || true
+        pm2 delete stoic-backend 2>/dev/null || true
+        
+        # Start with PM2
+        echo "🎬 Starting application..."
+        pm2 start ecosystem.config.js
+        pm2 save
+        
+        # Show status
+        pm2 status
+        
+        echo "✅ Deployment completed successfully!"
+        EOF
+        
+        chmod +x deploy/start.sh
+        
+        # Create archive
+        tar -czf deployment.tar.gz -C deploy .
+
+    - name: 📤 Deploy to EC2
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        port: 22
+        script: |
+          # Create application directory
+          sudo mkdir -p ${{ env.APP_PATH }}
+          sudo chown ubuntu:ubuntu ${{ env.APP_PATH }}
+          
+          # Create backup of current deployment
+          if [ -d "${{ env.APP_PATH }}/current" ]; then
+            echo "📦 Creating backup..."
+            sudo mv ${{ env.APP_PATH }}/current ${{ env.APP_PATH }}/backup-$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
+          fi
+          
+          # Create new deployment directory
+          mkdir -p ${{ env.APP_PATH }}/current
+
+    - name: 📁 Transfer Files to EC2
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        port: 22
+        source: "./stoicattitude-backend/deployment.tar.gz"
+        target: "/home/ubuntu/temp/"
+        strip_components: 1
+
+    - name: 🎯 Extract and Deploy
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        port: 22
+        script: |
+          # Extract deployment package
+          cd ${{ env.APP_PATH }}/current
+          tar -xzf /home/ubuntu/temp/deployment.tar.gz
+          rm -f /home/ubuntu/temp/deployment.tar.gz
+          
+          # Copy environment file (must be manually placed on server)
+          if [ -f "/home/ubuntu/.env.production" ]; then
+            cp /home/ubuntu/.env.production ${{ env.APP_PATH }}/current/.env
+          else
+            echo "⚠️  WARNING: .env.production not found, using defaults"
+          fi
+          
+          # Make scripts executable
+          chmod +x ${{ env.APP_PATH }}/current/start.sh
+          
+          # Run deployment script
+          cd ${{ env.APP_PATH }}/current
+          ./start.sh
+
+    - name: 🏥 Health Check
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        port: 22
+        script: |
+          # Wait for application to start
+          echo "⏳ Waiting for application to start..."
+          sleep 30
+          
+          # Check if application is running
+          if pm2 list | grep -q "stoic-backend.*online"; then
+            echo "✅ Application is running"
+            
+            # Test health endpoint
+            if curl -f http://localhost:1337/api/health > /dev/null 2>&1; then
+              echo "✅ Health check passed"
+              
+              # Show application logs
+              echo "📊 Recent application logs:"
+              pm2 logs stoic-backend --lines 10 --nostream
+              
+            else
+              echo "❌ Health check failed"
+              pm2 logs stoic-backend --lines 20 --nostream
+              exit 1
+            fi
+          else
+            echo "❌ Application failed to start"
+            pm2 logs stoic-backend --lines 20 --nostream
+            exit 1
+          fi
+
+    - name: 🧹 Cleanup Old Deployments
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        port: 22
+        script: |
+          # Keep only last 3 backups
+          cd ${{ env.APP_PATH }}
+          ls -dt backup-* 2>/dev/null | tail -n +4 | xargs rm -rf 2>/dev/null || true
+          
+          echo "🎉 Deployment completed successfully!"
+
+  # ===================================================================
+  # JOB 3: NOTIFY ON FAILURE
+  # ===================================================================
+  notify-failure:
+    name: 🚨 Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [test, deploy]
+    if: failure()
+    
+    steps:
+    - name: 📢 Deployment Failed Notification
+      run: |
+        echo "❌ Deployment failed!"
+        echo "🔍 Check the logs above for details"
+        echo "📋 Commit: ${{ github.sha }}"
+        echo "🌿 Branch: ${{ github.ref }}"
+        echo "👤 Author: ${{ github.actor }}"
